@@ -113,7 +113,7 @@ pnpm dev:api
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | 用 `openssl rand -hex 32` 生成 |
 | `MYSQL_PASSWORD` / `MYSQL_ROOT_PASSWORD` | 数据库口令 |
 | `ADMIN_PASSWORD` | seed 出的后台账号口令 |
-| `DEPLOY_SSH_KEY` | 部署用私钥（对应公钥写入服务器 `~/.ssh/authorized_keys`） |
+| `DEPLOY_SSH_KEY` | 部署私钥：推荐填 `base64 -w0 < ~/.ssh/github-actions` 的单行结果，也可填完整 PEM 原文；对应公钥需在服务器 `~/.ssh/authorized_keys` |
 
 **Variables（非敏感）**
 

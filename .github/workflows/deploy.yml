@@ -184,9 +184,21 @@ jobs:
           : "${DEPLOY_HOST:?set the DEPLOY_HOST variable}"
           : "${DEPLOY_USER:?set the DEPLOY_USER variable}"
 
+          # Accept either the PEM text or its base64 form. Pasting a multi-line
+          # secret into the GitHub UI is the most common way to corrupt a key,
+          # so `base64 -w0 < key` is the safer value to store.
           install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$SSH_KEY" >"$HOME/.ssh/deploy_key"
+          if [[ "$SSH_KEY" == -----BEGIN* ]]; then
+            printf '%s\n' "$SSH_KEY" >"$HOME/.ssh/deploy_key"
+          else
+            printf '%s' "$SSH_KEY" | base64 -d >"$HOME/.ssh/deploy_key"
+          fi
           chmod 600 "$HOME/.ssh/deploy_key"
+          if ! ssh-keygen -y -f "$HOME/.ssh/deploy_key" >/dev/null 2>&1; then
+            echo "DEPLOY_SSH_KEY is not a usable private key." >&2
+            echo "Re-paste the whole file, or store 'base64 -w0 < key' instead." >&2
+            exit 1
+          fi
 
           ssh_opts=(
             -i "$HOME/.ssh/deploy_key"
@@ -209,17 +221,12 @@ jobs:
 
       - name: Roll the production stack
         env:
-          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          install -d -m 700 "$HOME/.ssh"
-          printf '%s\n' "$SSH_KEY" >"$HOME/.ssh/deploy_key"
-          chmod 600 "$HOME/.ssh/deploy_key"
-
           ssh_opts=(
             -i "$HOME/.ssh/deploy_key"
             -o IdentitiesOnly=yes
