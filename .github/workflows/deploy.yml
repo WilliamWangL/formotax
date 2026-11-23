@@ -247,6 +247,14 @@ jobs:
             docker compose -f /root/workspace/tax/docker-compose.yml down \
               --remove-orphans --timeout 20 >/dev/null 2>&1 || true
 
+            # The data volumes predate this project and are declared external:
+            # Compose will mount them but never create or remove them, so make
+            # sure they exist for a first deploy on a clean host.
+            for volume in tax-form-generator_mysql-data tax-form-generator_redis-data; do
+              docker volume inspect "\$volume" >/dev/null 2>&1 \
+                || docker volume create "\$volume" >/dev/null
+            done
+
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d --remove-orphans \
               --wait --wait-timeout 300

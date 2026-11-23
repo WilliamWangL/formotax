@@ -111,7 +111,7 @@ pnpm dev:api
 | `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | PayPal App 凭据，缺失时下单返回 `PAYMENT_NOT_CONFIGURED` |
 | `PAYPAL_WEBHOOK_ID` | Webhook 验签 ID |
 | `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | 用 `openssl rand -hex 32` 生成 |
-| `MYSQL_PASSWORD` / `MYSQL_ROOT_PASSWORD` | 数据库口令 |
+| `MYSQL_PASSWORD` / `MYSQL_ROOT_PASSWORD` | 数据库口令；`MYSQL_PASSWORD` 可含 `@ : / #`，连接串里的密码由脚本 percent-encode |
 | `ADMIN_PASSWORD` | seed 出的后台账号口令 |
 | `DEPLOY_SSH_KEY` | 部署私钥：推荐填 `base64 -w0 < ~/.ssh/github-actions` 的单行结果，也可填完整 PEM 原文；对应公钥需在服务器 `~/.ssh/authorized_keys` |
 
@@ -126,12 +126,15 @@ pnpm dev:api
 | `WEB_PORT` / `API_PORT` / `MYSQL_DATABASE` / `MYSQL_USER` / `ADMIN_EMAIL` | `3004` / `8083` / `tax_form` / `tax` / `admin@formotax.com` |
 | `DEPLOY_HOST` / `DEPLOY_USER` | 服务器地址、SSH 用户（部署目录固定为 `/opt/tax`） |
 
+`DATABASE_URL` 不用手工配置：`deploy/render-env.sh` 按 `MYSQL_USER` / `MYSQL_PASSWORD` / `MYSQL_DATABASE` 生成，并对密码做 percent-encoding，所以密码含 `@ : / #` 也不会拼坏连接串（原先的 `P1013 invalid port number` 就是这类问题）。只有需要指向外部数据库时才显式提供。
+
 **部署架构（与 fincode 一致）**
 
 - CI 构建镜像并推送到 GHCR：`ghcr.io/williamwangl/formotax-api`、`ghcr.io/williamwangl/formotax-web`（同时打 `latest` 和 commit sha 两个 tag，后者用于回滚）。
 - 服务器只 `docker compose -f docker-compose.prod.yml pull && up -d --wait`，**不 clone 源码、不装 Node、不本地构建**。
+- 数据卷 `tax-form-generator_mysql-data` / `tax-form-generator_redis-data` 在 compose 里声明为 `external`：它们由更早的 project 创建，Compose 只挂载、不创建也不删除，`down -v` 不会清库；部署任务在卷缺失时会自动 `docker volume create`。
 - 流水线每次 `scp`：`docker-compose.prod.yml`、`.env` 到 `/opt/tax`，并把 `deploy/nginx/` 同步到 `/opt/tax/deploy/nginx/` 供宿主机安装（安装进 `/etc/nginx/conf.d/` 需 root，属手工步骤）。
-- MySQL / Redis 容器不变，卷名显式复用 `tax-form-generator_mysql-data` / `tax-form-generator_redis-data`，从旧 `docker-compose.yml` 切过来不会丢数据。
+- 从旧的 `docker-compose.yml` 切换过来不会丢数据：卷名固定为 `tax-form-generator_*`，只换 project 名不影响挂载。
 
 **配置步骤**
 

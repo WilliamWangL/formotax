@@ -68,6 +68,20 @@ value_of() {
   fi
 }
 
+# Percent-encode a value for the userinfo part of a URL. Passwords are routinely
+# generated with @ : / # which would otherwise be read as URL delimiters.
+urlencode() {
+  local s=$1 encoded= i c
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    case $c in
+      [A-Za-z0-9.~_-]) encoded+=$c ;;
+      *) printf -v c '%%%02X' "'$c" && encoded+=$c ;;
+    esac
+  done
+  printf '%s' "$encoded"
+}
+
 required_values=(
   JWT_ACCESS_SECRET
   JWT_REFRESH_SECRET
@@ -113,6 +127,13 @@ mysql_port=${mysql_port:-3306}
 
 redis_port=$(value_of REDIS_PORT)
 redis_port=${redis_port:-6379}
+
+# docker-compose.prod.yml consumes DATABASE_URL directly so the password can be
+# escaped here. An explicitly supplied DATABASE_URL still wins.
+database_url=$(value_of DATABASE_URL)
+if [ -z "$database_url" ]; then
+  database_url="mysql://${mysql_user}:$(urlencode "$(value_of MYSQL_PASSWORD)")@mysql:${mysql_port}/${mysql_database}"
+fi
 
 jwt_access_ttl=$(value_of JWT_ACCESS_TTL)
 jwt_access_ttl=${jwt_access_ttl:-900}
@@ -185,6 +206,7 @@ MYSQL_PASSWORD=$(value_of MYSQL_PASSWORD)
 MYSQL_ROOT_PASSWORD=$(value_of MYSQL_ROOT_PASSWORD)
 MYSQL_PORT=$mysql_port
 REDIS_PORT=$redis_port
+DATABASE_URL=$database_url
 
 # ---------- PayPal (the only payment method) ----------
 PAYPAL_MODE=$paypal_mode

@@ -54,7 +54,9 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4000
-      DATABASE_URL: mysql://${MYSQL_USER:-tax}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-tax_form}
+      # Built by deploy/render-env.sh, which percent-encodes the password:
+      # an unescaped @ or : in MYSQL_PASSWORD breaks URL parsing (Prisma P1013).
+      DATABASE_URL: ${DATABASE_URL:?missing DATABASE_URL - run deploy/render-env.sh}
       REDIS_URL: redis://redis:6379
       WEB_URL: ${PUBLIC_BASE_URL}
       CORS_ORIGINS: ${PUBLIC_BASE_URL}
@@ -98,7 +100,12 @@ services:
       start_period: 30s
 
 volumes:
+  # These volumes predate the tax-form-prod project. Marking them external keeps
+  # Compose from warning about the owner name and from deleting them on down -v.
+  # The deploy job creates them if missing, so a fresh host still works.
   mysql-data:
     name: tax-form-generator_mysql-data
+    external: true
   redis-data:
     name: tax-form-generator_redis-data
+    external: true
