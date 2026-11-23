@@ -15,15 +15,20 @@ if ! getent hosts "$domain" >/dev/null; then
   exit 1
 fi
 
-# 1. Bootstrap block: ACME webroot + temporary HTTP passthrough.
-install -m 0644 "$repo_root/deploy/nginx/$domain.bootstrap.conf" "$conf"
-nginx -t
-nginx -s reload
+# 1. Bootstrap block: ACME webroot + temporary HTTP passthrough. Only needed
+#    while the certificate is missing, so re-running never drops HTTPS.
+if [ ! -f "/etc/letsencrypt/live/$domain/fullchain.pem" ]; then
+  install -m 0644 "$repo_root/deploy/nginx/$domain.bootstrap.conf" "$conf"
+  nginx -t
+  nginx -s reload
 
-# 2. Certificate (webroot shares /var/www/letsencrypt with the other sites).
-certbot certonly --webroot -w /var/www/letsencrypt -d "$domain" --cert-name "$domain"
+  # 2. Certificate (webroot shares /var/www/letsencrypt with the other sites).
+  certbot certonly --webroot -w /var/www/letsencrypt -d "$domain" \
+    --cert-name "$domain" --non-interactive --agree-tos --keep-until-expiring
+fi
 
-# 3. Full block: HTTP -> HTTPS redirect, HSTS-free proxy to 127.0.0.1:8080.
+# 3. Full block: HTTP -> HTTPS redirect, proxy to the loopback ports
+#    (web 3004, api 8083).
 install -m 0644 "$repo_root/deploy/nginx/$domain.conf" "$conf"
 nginx -t
 nginx -s reload
