@@ -1,0 +1,147 @@
+name: Deploy
+
+# Credentials live in GitHub, never in the repository:
+#   Settings → Secrets and variables → Actions
+# Secrets hold the values below; "Variables" hold the non-sensitive ones.
+#
+#   Secrets:   PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_WEBHOOK_ID,
+#              JWT_ACCESS_SECRET, JWT_REFRESH_SECRET, MYSQL_PASSWORD,
+#              MYSQL_ROOT_PASSWORD, ADMIN_PASSWORD, DEPLOY_SSH_KEY
+#   Variables: PUBLIC_BASE_URL, HTTP_PORT, MYSQL_DATABASE, MYSQL_USER,
+#              ADMIN_EMAIL, PAYPAL_MODE, PAYPAL_BRAND_NAME,
+#              DOWNLOAD_PRICE_USD, DOWNLOAD_ACCESS_HOURS,
+#              DEPLOY_HOST, DEPLOY_USER, DEPLOY_PATH
+#
+# `deploy/render-env.sh` turns them into the server's .env at deploy time.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.8.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm --filter @tax/api prisma:generate
+
+      # next-env.d.ts references .next/types/routes.d.ts, which only exists
+      # after a build, so typecheck has to run behind it.
+      - name: Build workspaces
+        run: pnpm build
+
+      - name: Typecheck every workspace
+        run: pnpm -r typecheck
+
+  deploy:
+    name: Deploy to production
+    needs: verify
+    runs-on: ubuntu-latest
+    # Put the secrets below on this environment to gate deployments with
+    # required reviewers. The environment is created on first use.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require an explicit PayPal mode
+        env:
+          PAYPAL_MODE: ${{ vars.PAYPAL_MODE }}
+        run: |
+          case "$PAYPAL_MODE" in
+            live | sandbox) ;;
+            *)
+              echo "Set the PAYPAL_MODE repository variable to 'live' or 'sandbox'." >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Render .env from Actions secrets
+        env:
+          # Non-sensitive configuration (Variables).
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          HTTP_PORT: ${{ vars.HTTP_PORT }}
+          MYSQL_DATABASE: ${{ vars.MYSQL_DATABASE }}
+          MYSQL_USER: ${{ vars.MYSQL_USER }}
+          ADMIN_EMAIL: ${{ vars.ADMIN_EMAIL }}
+          PAYPAL_MODE: ${{ vars.PAYPAL_MODE }}
+          PAYPAL_BRAND_NAME: ${{ vars.PAYPAL_BRAND_NAME }}
+          DOWNLOAD_PRICE_USD: ${{ vars.DOWNLOAD_PRICE_USD }}
+          DOWNLOAD_ACCESS_HOURS: ${{ vars.DOWNLOAD_ACCESS_HOURS }}
+          # Credentials (Secrets). Never echoed: the script only reports names.
+          PAYPAL_CLIENT_ID: ${{ secrets.PAYPAL_CLIENT_ID }}
+          PAYPAL_CLIENT_SECRET: ${{ secrets.PAYPAL_CLIENT_SECRET }}
+          PAYPAL_WEBHOOK_ID: ${{ secrets.PAYPAL_WEBHOOK_ID }}
+          JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
+          JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+        run: bash deploy/render-env.sh --out .env.deploy </dev/null
+
+      - name: Upload .env and restart the stack
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          : "${DEPLOY_HOST:?set the DEPLOY_HOST variable}"
+          : "${DEPLOY_USER:?set the DEPLOY_USER variable}"
+          : "${DEPLOY_PATH:?set the DEPLOY_PATH variable}"
+
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" >"$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+
+          ssh_opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+          )
+
+          scp "${ssh_opts[@]}" .env.deploy "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/.env"
+          # scp applies the remote umask; tighten the file before anything
+          # else can read it.
+          ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd '$DEPLOY_PATH' && chmod 600 .env && git pull --ff-only && docker compose up -d --build && docker compose ps"
+
+      - name: Health check
+        env:
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+        run: |
+          base=${PUBLIC_BASE_URL:-https://formotax.ecommica.com}
+          for attempt in $(seq 1 30); do
+            if curl -fsS --max-time 5 "$base/api/v1/health" | grep -q '"status":"ok"'; then
+              echo "API is healthy."
+              exit 0
+            fi
+            echo "Waiting for the API (attempt $attempt/30)…"
+            sleep 10
+          done
+          echo "Health check failed: $base/api/v1/health" >&2
+          exit 1

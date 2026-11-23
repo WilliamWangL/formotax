@@ -1,0 +1,20 @@
+{
+  "name": "@tax/pdf-engine",
+  "version": "1.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@tax/shared-types": "workspace:*",
+    "@tax/validation": "workspace:*",
+    "pdf-lib": "1.17.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.12.0",
+    "typescript": "5.9.3"
+  }
+}

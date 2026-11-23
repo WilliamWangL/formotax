@@ -1,0 +1,172 @@
+// Prisma schema for the FormoTax API.
+// MySQL 8.0, utf8mb4, InnoDB, BIGINT primary keys, DECIMAL money, JSON config.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              BigInt    @id @default(autoincrement())
+  email           String    @unique @db.VarChar(255)
+  passwordHash    String    @map("password_hash") @db.VarChar(255)
+  name            String?   @db.VarChar(120)
+  /// 1 = active, 0 = disabled
+  status          Int       @default(1)
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  lastLoginAt     DateTime? @map("last_login_at")
+  deletedAt       DateTime? @map("deleted_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  taxForms     UserTaxForm[]
+  orders       PaymentOrder[]
+  usageLogs    UsageLog[]
+
+  @@index([status, createdAt])
+  @@map("users")
+}
+
+model TaxForm {
+  id          BigInt    @id @default(autoincrement())
+  formCode    String    @map("form_code") @db.VarChar(50)
+  country     String    @db.VarChar(10)
+  name        String    @db.VarChar(255)
+  description String?   @db.Text
+  /// 1 = active, 0 = archived
+  status      Int       @default(1)
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  versions  TaxFormVersion[]
+  userForms UserTaxForm[]
+
+  @@unique([formCode, country])
+  @@map("tax_forms")
+}
+
+model TaxFormVersion {
+  id            BigInt    @id @default(autoincrement())
+  formId        BigInt    @map("form_id")
+  version       String    @db.VarChar(50)
+  templatePath  String    @map("template_path") @db.VarChar(500)
+  configJson    Json      @map("config_json")
+  mappingJson   Json      @map("mapping_json")
+  effectiveDate DateTime? @map("effective_date") @db.Date
+  /// 1 = active, 0 = archived
+  status        Int       @default(1)
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  form      TaxForm       @relation(fields: [formId], references: [id], onDelete: Cascade)
+  userForms UserTaxForm[]
+
+  @@unique([formId, version])
+  @@index([formId, status])
+  @@map("tax_form_versions")
+}
+
+/// Metadata only: tax answers, SSN/EIN values and signatures are never stored.
+model UserTaxForm {
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt   @map("user_id")
+  formId    BigInt   @map("form_id")
+  versionId BigInt   @map("version_id")
+  title     String   @db.VarChar(255)
+  /// 1 = draft, 2 = completed, 0 = deleted
+  status    Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  form    TaxForm        @relation(fields: [formId], references: [id], onDelete: Cascade)
+  version TaxFormVersion @relation(fields: [versionId], references: [id], onDelete: Restrict)
+
+  @@index([userId, status, updatedAt])
+  @@map("user_tax_forms")
+}
+
+model PaymentOrder {
+  id        BigInt    @id @default(autoincrement())
+  orderNo   String    @unique @map("order_no") @db.VarChar(64)
+  userId    BigInt    @map("user_id")
+  /// Form being unlocked. Null only on orders created before pay-per-download.
+  formCode  String?   @map("form_code") @db.VarChar(50)
+  amount    Decimal   @db.Decimal(10, 2)
+  currency  String    @default("USD") @db.VarChar(10)
+  provider  String    @db.VarChar(50)
+  /// Provider-side checkout id (PayPal order id); needed to capture the payment.
+  providerSessionId String? @map("provider_session_id") @db.VarChar(255)
+  /// pending | paid | failed | refunded
+  status    String    @db.VarChar(30)
+  paidAt    DateTime? @map("paid_at")
+  /// End of the re-download window granted by this purchase.
+  accessExpiresAt DateTime? @map("access_expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions PaymentTransaction[]
+
+  @@index([userId, createdAt])
+  @@index([userId, formCode, status])
+  @@index([status, createdAt])
+  @@map("payment_orders")
+}
+
+model PaymentTransaction {
+  id            BigInt   @id @default(autoincrement())
+  orderId       BigInt   @map("order_id")
+  transactionId String   @unique @map("transaction_id") @db.VarChar(255)
+  provider      String   @db.VarChar(50)
+  amount        Decimal  @db.Decimal(10, 2)
+  status        String   @db.VarChar(30)
+  callbackData  Json?    @map("callback_data")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  order PaymentOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("payment_transactions")
+}
+
+/// Never stores answers, SSN/EIN, signatures or document content.
+model UsageLog {
+  id        BigInt   @id @default(autoincrement())
+  userId    BigInt?  @map("user_id")
+  action    String   @db.VarChar(50)
+  formCode  String?  @map("form_code") @db.VarChar(50)
+  quantity  Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@map("usage_logs")
+}
+
+model SystemConfig {
+  id          BigInt   @id @default(autoincrement())
+  configKey   String   @unique @map("config_key") @db.VarChar(100)
+  configValue Json     @map("config_value")
+  description String?  @db.VarChar(255)
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("system_configs")
+}
+
+model AdminUser {
+  id           BigInt    @id @default(autoincrement())
+  email        String    @unique @db.VarChar(255)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  role         String    @default("admin") @db.VarChar(30)
+  status       Int       @default(1)
+  lastLoginAt  DateTime? @map("last_login_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  @@map("admin_users")
+}

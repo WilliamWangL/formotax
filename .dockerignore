@@ -1,0 +1,26 @@
+# Keep the build context small and never ship secrets or local artefacts.
+node_modules
+**/node_modules
+.next
+**/.next
+dist
+**/dist
+.turbo
+coverage
+*.tsbuildinfo
+
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+*.log
+
+docs
+doc.txt
+在线税表生成工具网站技术方案_V1.1.docx
+README.md
+
+# Runtime local storage (mounted as a volume in docker compose)
+storage

@@ -1,0 +1,27 @@
+{
+  "name": "tax-form-generator",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Global Tax Form Generator - online tax form filling and PDF generation platform",
+  "packageManager": "pnpm@12.8.1",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @tax/web --filter @tax/api dev",
+    "dev:web": "pnpm --filter @tax/web dev",
+    "dev:api": "pnpm --filter @tax/api dev",
+    "build": "pnpm --filter './packages/**' build && pnpm --filter @tax/web build && pnpm --filter @tax/api build",
+    "typecheck": "pnpm -r typecheck",
+    "smoke": "bash scripts/smoke.sh",
+    "pdf:calibrate": "pnpm --filter @tax/pdf-engine calibrate",
+    "db:migrate": "pnpm --filter @tax/api prisma:migrate",
+    "db:seed": "pnpm --filter @tax/api prisma:seed",
+    "docker:up": "docker compose up -d mysql redis",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "prettier": "3.6.2"
+  }
+}
