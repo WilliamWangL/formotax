@@ -123,18 +123,26 @@ pnpm dev:api
 | `PAYPAL_BRAND_NAME` | `FormoTax` |
 | `DOWNLOAD_PRICE_USD` / `DOWNLOAD_ACCESS_HOURS` | `1` / `24` |
 | `HTTP_PORT` / `MYSQL_DATABASE` / `MYSQL_USER` / `ADMIN_EMAIL` | `127.0.0.1:8080` / `tax_form` / `tax` / `admin@formotax.com` |
-| `DEPLOY_HOST` / `DEPLOY_USER` / `DEPLOY_PATH` | 服务器地址、SSH 用户、仓库路径 |
+| `DEPLOY_HOST` / `DEPLOY_USER` | 服务器地址、SSH 用户（部署目录固定为 `/root/workspace/tax`） |
+
+**部署架构（与 fincode 一致）**
+
+- CI 构建镜像并推送到 GHCR：`ghcr.io/williamwangl/formotax-api`、`ghcr.io/williamwangl/formotax-web`（同时打 `latest` 和 commit sha 两个 tag，后者用于回滚）。
+- 服务器只 `docker compose -f docker-compose.prod.yml pull && up -d --wait`，**不 clone 源码、不装 Node、不本地构建**。
+- 流水线每次 `scp` 三个文件到部署目录：`docker-compose.prod.yml`、`docker/nginx.conf`、`.env`。
+- MySQL / Redis 容器不变，卷名显式复用 `tax-form-generator_mysql-data` / `tax-form-generator_redis-data`，从旧 `docker-compose.yml` 切过来不会丢数据。
 
 **配置步骤**
 
 1. 仓库 → Settings → Secrets and variables → Actions，按上表分别添加 Secrets 和 Variables。
 2. （可选但建议）Settings → Environments → 新建 `production`，把 Secrets 放到环境级并加必填审阅人；流水线已声明 `environment: production`。
-3. 服务器准备：`git clone` 到 `DEPLOY_PATH`，装好 Docker + Compose，并把部署公钥加入 `~/.ssh/authorized_keys`。
-4. 推送 `main` 或手动 Run workflow：`verify` 先跑 typecheck，`deploy` 渲染 `.env` → `scp` 到服务器 → `git pull --ff-only` → `docker compose up -d --build` → 健康检查。
+3. 服务器准备：装好 Docker + Compose（需 v2.17+，用到 `--wait`），把部署公钥加入 `~/.ssh/authorized_keys`，并建好部署目录 `/root/workspace/tax`（含 `storage/`）。
+4. 推送 `main` 或手动 Run workflow：`verify`（typecheck）→ `build-api` / `build-web` 推镜像到 GHCR → `deploy` 渲染 `.env` → `scp` 配置 → 服务器 `pull` + `up -d --wait`。
 
 **注意**
 
 - 服务器上的 `.env` 由流水线覆盖，**不要手工编辑**；临时调试可用 `bash deploy/render-env.sh --check` 只做校验。
+- 首次切换时流水线会执行 `docker compose -f docker-compose.yml down`，停掉旧的本地构建栈（命名卷保留，数据库不丢）。
 - Fork 的 PR 拿不到 Secrets；日志中凭据会自动打码，但不要自己 `echo` 变量。
 - 轮换：改完 PayPal 后台的 Secret 后更新同名 Actions Secret，重新 Run workflow 即生效。
 - 若凭据曾提交进 git 历史，仅删除文件无效，需要重写历史，并立即在 PayPal 后台 Reset。

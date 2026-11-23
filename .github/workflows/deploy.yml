@@ -1,16 +1,18 @@
 name: Deploy
 
-# Credentials live in GitHub, never in the repository:
-#   Settings → Secrets and variables → Actions
-# Secrets hold the values below; "Variables" hold the non-sensitive ones.
+# Build the api and web images in CI, push them to GHCR, then roll the stack on
+# the server. The server only pulls images (same model as the fincode project),
+# so it needs neither Node nor the build toolchain.
 #
-#   Secrets:   PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_WEBHOOK_ID,
-#              JWT_ACCESS_SECRET, JWT_REFRESH_SECRET, MYSQL_PASSWORD,
-#              MYSQL_ROOT_PASSWORD, ADMIN_PASSWORD, DEPLOY_SSH_KEY
-#   Variables: PUBLIC_BASE_URL, HTTP_PORT, MYSQL_DATABASE, MYSQL_USER,
-#              ADMIN_EMAIL, PAYPAL_MODE, PAYPAL_BRAND_NAME,
-#              DOWNLOAD_PRICE_USD, DOWNLOAD_ACCESS_HOURS,
-#              DEPLOY_HOST, DEPLOY_USER, DEPLOY_PATH
+# Secrets (Settings -> Secrets and variables -> Actions):
+#   DEPLOY_SSH_KEY        private key whose public half is in ~/.ssh/authorized_keys
+#   PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET / PAYPAL_WEBHOOK_ID
+#   JWT_ACCESS_SECRET / JWT_REFRESH_SECRET
+#   MYSQL_PASSWORD / MYSQL_ROOT_PASSWORD / ADMIN_PASSWORD
+# Variables:
+#   PAYPAL_MODE           live | sandbox (required; the job fails without it)
+#   DEPLOY_HOST / DEPLOY_USER
+#   PUBLIC_BASE_URL       optional, defaults to https://formotax.ecommica.com
 #
 # `deploy/render-env.sh` turns them into the server's .env at deploy time.
 
@@ -22,6 +24,13 @@ on:
 concurrency:
   group: deploy-production
   cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  # GHCR image paths must be lowercase; the repository owner is not.
+  IMAGE_PREFIX: ghcr.io/williamwangl/formotax
+  # The stack always lives here on this host: storage/ is bind-mounted from it.
+  DEPLOY_DIR: /root/workspace/tax
 
 permissions:
   contents: read
@@ -56,13 +65,78 @@ jobs:
       - name: Typecheck every workspace
         run: pnpm -r typecheck
 
-  deploy:
-    name: Deploy to production
+  build-api:
+    name: Build & push api image
     needs: verify
     runs-on: ubuntu-latest
-    # Put the secrets below on this environment to gate deployments with
-    # required reviewers. The environment is created on first use.
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.api
+          platforms: linux/amd64
+          push: true
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-api:latest
+            ${{ env.IMAGE_PREFIX }}-api:${{ github.sha }}
+
+  build-web:
+    name: Build & push web image
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.web
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            NEXT_PUBLIC_SITE_URL=${{ vars.PUBLIC_BASE_URL || 'https://formotax.ecommica.com' }}
+            NEXT_PUBLIC_API_URL=${{ vars.PUBLIC_BASE_URL || 'https://formotax.ecommica.com' }}/api/v1
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-web:latest
+            ${{ env.IMAGE_PREFIX }}-web:${{ github.sha }}
+
+  deploy:
+    name: Deploy to server
+    needs: [build-api, build-web]
+    runs-on: ubuntu-latest
+    # Put the secrets on this environment to require manual approval.
     environment: production
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
@@ -80,7 +154,6 @@ jobs:
 
       - name: Render .env from Actions secrets
         env:
-          # Non-sensitive configuration (Variables).
           PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
           HTTP_PORT: ${{ vars.HTTP_PORT }}
           MYSQL_DATABASE: ${{ vars.MYSQL_DATABASE }}
@@ -90,7 +163,6 @@ jobs:
           PAYPAL_BRAND_NAME: ${{ vars.PAYPAL_BRAND_NAME }}
           DOWNLOAD_PRICE_USD: ${{ vars.DOWNLOAD_PRICE_USD }}
           DOWNLOAD_ACCESS_HOURS: ${{ vars.DOWNLOAD_ACCESS_HOURS }}
-          # Credentials (Secrets). Never echoed: the script only reports names.
           PAYPAL_CLIENT_ID: ${{ secrets.PAYPAL_CLIENT_ID }}
           PAYPAL_CLIENT_SECRET: ${{ secrets.PAYPAL_CLIENT_SECRET }}
           PAYPAL_WEBHOOK_ID: ${{ secrets.PAYPAL_WEBHOOK_ID }}
@@ -101,17 +173,15 @@ jobs:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
         run: bash deploy/render-env.sh --out .env.deploy </dev/null
 
-      - name: Upload .env and restart the stack
+      - name: Upload compose files and .env
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
           DEPLOY_USER: ${{ vars.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
         run: |
           set -euo pipefail
           : "${DEPLOY_HOST:?set the DEPLOY_HOST variable}"
           : "${DEPLOY_USER:?set the DEPLOY_USER variable}"
-          : "${DEPLOY_PATH:?set the DEPLOY_PATH variable}"
 
           install -d -m 700 "$HOME/.ssh"
           printf '%s\n' "$SSH_KEY" >"$HOME/.ssh/deploy_key"
@@ -124,24 +194,51 @@ jobs:
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
           )
 
-          scp "${ssh_opts[@]}" .env.deploy "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/.env"
-          # scp applies the remote umask; tighten the file before anything
-          # else can read it.
-          ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd '$DEPLOY_PATH' && chmod 600 .env && git pull --ff-only && docker compose up -d --build && docker compose ps"
+          ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_DIR/docker'"
+          scp "${ssh_opts[@]}" docker-compose.prod.yml \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR/docker-compose.prod.yml"
+          scp "${ssh_opts[@]}" docker/nginx.conf \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR/docker/nginx.conf"
+          scp "${ssh_opts[@]}" .env.deploy \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR/.env"
+          # scp applies the remote umask; tighten before anything reads it.
+          ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "chmod 600 '$DEPLOY_DIR/.env'"
 
-      - name: Health check
+      - name: Roll the production stack
         env:
-          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_OWNER: ${{ github.repository_owner }}
         run: |
-          base=${PUBLIC_BASE_URL:-https://formotax.ecommica.com}
-          for attempt in $(seq 1 30); do
-            if curl -fsS --max-time 5 "$base/api/v1/health" | grep -q '"status":"ok"'; then
-              echo "API is healthy."
-              exit 0
-            fi
-            echo "Waiting for the API (attempt $attempt/30)…"
-            sleep 10
-          done
-          echo "Health check failed: $base/api/v1/health" >&2
-          exit 1
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_KEY" >"$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+
+          ssh_opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=accept-new
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+          )
+
+          ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "
+            set -eu
+            cd '$DEPLOY_DIR'
+
+            # GITHUB_TOKEN is short-lived: log in just long enough to pull.
+            echo '$GH_TOKEN' | docker login '$REGISTRY' -u '$GH_OWNER' --password-stdin
+
+            # The development stack (docker-compose.yml) still holds the ports;
+            # stop it once. Named volumes survive, so the database is kept.
+            docker compose -f docker-compose.yml down --remove-orphans --timeout 20 \
+              >/dev/null 2>&1 || true
+
+            docker compose -f docker-compose.prod.yml pull
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans \
+              --wait --wait-timeout 300
+            docker image prune -f
+            docker compose -f docker-compose.prod.yml ps
+          "

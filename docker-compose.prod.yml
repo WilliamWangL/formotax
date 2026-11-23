@@ -1,0 +1,115 @@
+name: tax-form-prod
+
+# Production stack. Images are built by .github/workflows/deploy.yml and pushed
+# to GHCR; the server only pulls them, so it needs neither the source build
+# toolchain nor a git checkout for the app itself (model copied from fincode).
+#
+# The stack lives next to the source tree at /root/workspace/tax because the
+# api keeps its mutable templates in ./storage, which is bind-mounted below.
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-tax_form}
+      MYSQL_USER: ${MYSQL_USER:-tax}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      # Explicit name: reuse the volume the development compose file created so
+      # switching deployment modes never drops the database.
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ['CMD-SHELL', 'mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    expose:
+      - '3306'
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory', '256mb', '--maxmemory-policy', 'allkeys-lru']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  api:
+    image: ghcr.io/williamwangl/formotax-api:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: mysql://${MYSQL_USER:-tax}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-tax_form}
+      REDIS_URL: redis://redis:6379
+      WEB_URL: ${PUBLIC_BASE_URL}
+      CORS_ORIGINS: ${PUBLIC_BASE_URL}
+      TEMPLATE_DIR: ../web/public/templates
+      STORAGE_DIR: /app/storage
+    volumes:
+      - ./storage:/app/storage
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    expose:
+      - '4000'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider http://127.0.0.1:4000/api/v1/health || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+
+  web:
+    image: ghcr.io/williamwangl/formotax-web:latest
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_SITE_URL: ${PUBLIC_BASE_URL}
+      NEXT_PUBLIC_API_URL: ${PUBLIC_BASE_URL}/api/v1
+    depends_on:
+      api:
+        condition: service_healthy
+    expose:
+      - '3000'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider http://127.0.0.1:3000/ || exit 1']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      # The host nginx terminates TLS and proxies to this port.
+      - '${HTTP_PORT:-127.0.0.1:8080}:80'
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+
+volumes:
+  mysql-data:
+    name: tax-form-generator_mysql-data
+  redis-data:
+    name: tax-form-generator_redis-data
