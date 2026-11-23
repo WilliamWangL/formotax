@@ -72,10 +72,11 @@ pnpm dev:api
 
 服务器上以 `https://formotax.ecommica.com` 对外提供服务，容器只监听回环端口：
 
-- `.env`：`PUBLIC_BASE_URL` / `WEB_URL` / `NEXT_PUBLIC_SITE_URL` 都是 `https://formotax.ecommica.com`，`NEXT_PUBLIC_API_URL=https://formotax.ecommica.com/api/v1`，`HTTP_PORT=127.0.0.1:8080`
-- 宿主机 nginx 终止 TLS 后反代到 `127.0.0.1:8080`，配置模板见 `deploy/nginx/formotax.ecommica.com.conf`（首次签发证书前使用 `formotax.ecommica.com.bootstrap.conf`）
+- `.env`：`PUBLIC_BASE_URL` / `WEB_URL` / `NEXT_PUBLIC_SITE_URL` 都是 `https://formotax.ecommica.com`，`NEXT_PUBLIC_API_URL=https://formotax.ecommica.com/api/v1`，`WEB_PORT=3004`，`API_PORT=8083`
+- 容器层**不再运行 nginx**：web 发布 `127.0.0.1:3004`、api 发布 `127.0.0.1:8083`，由**宿主机 nginx** 终止 TLS 并按路径分流（`/api/ai/`、`/_next/`、`/templates/` 走 web，其余 `/api/` 走 api）
+- 宿主机配置模板：`deploy/nginx/formotax.ecommica.com.conf`（首次签发证书前用 `formotax.ecommica.com.bootstrap.conf`）；流水线会把它同步到 `/opt/tax/deploy/nginx/`，安装进 `/etc/nginx/conf.d/` 需 root，见 `deploy/enable-tls.sh`
 - 证书：`certbot certonly --webroot -w /var/www/letsencrypt -d formotax.ecommica.com`，安装完整配置后 `nginx -t && nginx -s reload`
-- `NEXT_PUBLIC_*` 在构建期注入，任何域名变更后必须重新 `docker compose build web`，否则 canonical / og:image 仍是旧值
+- `NEXT_PUBLIC_*` 在构建期注入，域名变更后重新触发流水线即可（CI 会重建 web 镜像）
 
 ## 环境变量
 
@@ -98,7 +99,7 @@ pnpm dev:api
 | `PAYPAL_MODE` / `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | PayPal REST 应用凭据（**必填**）；`sandbox` 走 `api-m.sandbox.paypal.com` |
 | `PAYPAL_WEBHOOK_ID` | PayPal Webhook ID，用于 `verify-webhook-signature` 验签 |
 | `PAYPAL_BRAND_NAME` / `PAYPAL_API_URL` | 结账页品牌名；可选 API 域名覆盖（代理场景） |
-| `PUBLIC_BASE_URL` / `HTTP_PORT` / `MYSQL_*` / `REDIS_PORT` | Docker Compose 使用 |
+| `PUBLIC_BASE_URL` / `HTTP_PORT` / `WEB_PORT` / `API_PORT` / `MYSQL_*` / `REDIS_PORT` | Docker Compose 使用（本地栈用 `HTTP_PORT`，生产栈用 `WEB_PORT` / `API_PORT`） |
 
 ### 凭据放在 GitHub Actions（推荐）
 
@@ -123,14 +124,14 @@ pnpm dev:api
 | `PAYPAL_MODE` | `live` 或 `sandbox`（未设置时流水线直接失败） |
 | `PAYPAL_BRAND_NAME` | `FormoTax` |
 | `DOWNLOAD_PRICE_USD` / `DOWNLOAD_ACCESS_HOURS` | `1` / `24` |
-| `HTTP_PORT` / `MYSQL_DATABASE` / `MYSQL_USER` / `ADMIN_EMAIL` | `127.0.0.1:8080` / `tax_form` / `tax` / `admin@formotax.com` |
+| `WEB_PORT` / `API_PORT` / `MYSQL_DATABASE` / `MYSQL_USER` / `ADMIN_EMAIL` | `3004` / `8083` / `tax_form` / `tax` / `admin@formotax.com` |
 | `DEPLOY_HOST` / `DEPLOY_USER` | 服务器地址、SSH 用户（部署目录固定为 `/opt/tax`） |
 
 **部署架构（与 fincode 一致）**
 
 - CI 构建镜像并推送到 GHCR：`ghcr.io/williamwangl/formotax-api`、`ghcr.io/williamwangl/formotax-web`（同时打 `latest` 和 commit sha 两个 tag，后者用于回滚）。
 - 服务器只 `docker compose -f docker-compose.prod.yml pull && up -d --wait`，**不 clone 源码、不装 Node、不本地构建**。
-- 流水线每次 `scp` 三个文件到部署目录：`docker-compose.prod.yml`、`docker/nginx.conf`、`.env`。
+- 流水线每次 `scp`：`docker-compose.prod.yml`、`.env` 到 `/opt/tax`，并把 `deploy/nginx/` 同步到 `/opt/tax/deploy/nginx/` 供宿主机安装（安装进 `/etc/nginx/conf.d/` 需 root，属手工步骤）。
 - MySQL / Redis 容器不变，卷名显式复用 `tax-form-generator_mysql-data` / `tax-form-generator_redis-data`，从旧 `docker-compose.yml` 切过来不会丢数据。
 
 **配置步骤**

@@ -96,8 +96,11 @@ public_base_url=$(value_of PUBLIC_BASE_URL)
 public_base_url=${public_base_url:-https://formotax.ecommica.com}
 public_base_url=${public_base_url%/}
 
-http_port=$(value_of HTTP_PORT)
-http_port=${http_port:-127.0.0.1:8080}
+web_port=$(value_of WEB_PORT)
+web_port=${web_port:-3004}
+
+api_port=$(value_of API_PORT)
+api_port=${api_port:-8083}
 
 mysql_database=$(value_of MYSQL_DATABASE)
 mysql_database=${mysql_database:-tax_form}
@@ -174,7 +177,8 @@ ADMIN_PASSWORD=$(value_of ADMIN_PASSWORD)
 
 # ---------- Docker Compose ----------
 PUBLIC_BASE_URL=$public_base_url
-HTTP_PORT=$http_port
+WEB_PORT=$web_port
+API_PORT=$api_port
 MYSQL_DATABASE=$mysql_database
 MYSQL_USER=$mysql_user
 MYSQL_PASSWORD=$(value_of MYSQL_PASSWORD)

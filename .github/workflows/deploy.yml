@@ -155,7 +155,8 @@ jobs:
       - name: Render .env from Actions secrets
         env:
           PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
-          HTTP_PORT: ${{ vars.HTTP_PORT }}
+          WEB_PORT: ${{ vars.WEB_PORT }}
+          API_PORT: ${{ vars.API_PORT }}
           MYSQL_DATABASE: ${{ vars.MYSQL_DATABASE }}
           MYSQL_USER: ${{ vars.MYSQL_USER }}
           ADMIN_EMAIL: ${{ vars.ADMIN_EMAIL }}
@@ -194,11 +195,13 @@ jobs:
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
           )
 
-          ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_DIR/docker'"
+          ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_DIR/deploy/nginx'"
           scp "${ssh_opts[@]}" docker-compose.prod.yml \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR/docker-compose.prod.yml"
-          scp "${ssh_opts[@]}" docker/nginx.conf \
-            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR/docker/nginx.conf"
+          # Host nginx configs are shipped for reference; installing them needs
+          # root on the host and stays a manual step (deploy/enable-tls.sh).
+          scp -r "${ssh_opts[@]}" deploy/nginx/. \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR/deploy/nginx/"
           scp "${ssh_opts[@]}" .env.deploy \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_DIR/.env"
           # scp applies the remote umask; tighten before anything reads it.

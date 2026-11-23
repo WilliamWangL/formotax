@@ -4,8 +4,9 @@ name: tax-form-prod
 # to GHCR; the server only pulls them, so it needs neither the source build
 # toolchain nor a git checkout for the app itself (model copied from fincode).
 #
-# The stack lives at /opt/tax; the api keeps its mutable templates in
-# ./storage, which is bind-mounted below.
+# The stack lives at /opt/tax. TLS and routing are owned by the host nginx
+# (deploy/nginx/formotax.ecommica.com.conf), so the containers publish only on
+# the loopback: web 3004, api 8083. There is no nginx container here.
 
 services:
   mysql:
@@ -61,13 +62,14 @@ services:
       STORAGE_DIR: /app/storage
     volumes:
       - ./storage:/app/storage
+    ports:
+      # The host nginx proxies /api/ here; loopback only.
+      - '127.0.0.1:${API_PORT:-8083}:4000'
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
-    expose:
-      - '4000'
     healthcheck:
       test: ['CMD-SHELL', 'wget -q --spider http://127.0.0.1:4000/api/v1/health || exit 1']
       interval: 15s
@@ -85,28 +87,15 @@ services:
     depends_on:
       api:
         condition: service_healthy
-    expose:
-      - '3000'
+    ports:
+      # The host nginx proxies everything else here; loopback only.
+      - '127.0.0.1:${WEB_PORT:-3004}:3000'
     healthcheck:
       test: ['CMD-SHELL', 'wget -q --spider http://127.0.0.1:3000/ || exit 1']
       interval: 15s
       timeout: 5s
       retries: 10
       start_period: 30s
-
-  nginx:
-    image: nginx:1.27-alpine
-    restart: unless-stopped
-    ports:
-      # The host nginx terminates TLS and proxies to this port.
-      - '${HTTP_PORT:-127.0.0.1:8080}:80'
-    volumes:
-      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      api:
-        condition: service_healthy
-      web:
-        condition: service_healthy
 
 volumes:
   mysql-data:
