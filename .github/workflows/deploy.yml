@@ -30,7 +30,7 @@ env:
   # GHCR image paths must be lowercase; the repository owner is not.
   IMAGE_PREFIX: ghcr.io/williamwangl/formotax
   # The stack always lives here on this host: storage/ is bind-mounted from it.
-  DEPLOY_DIR: /root/workspace/tax
+  DEPLOY_DIR: /opt/tax
 
 permissions:
   contents: read
@@ -231,10 +231,11 @@ jobs:
             # GITHUB_TOKEN is short-lived: log in just long enough to pull.
             echo '$GH_TOKEN' | docker login '$REGISTRY' -u '$GH_OWNER' --password-stdin
 
-            # The development stack (docker-compose.yml) still holds the ports;
-            # stop it once. Named volumes survive, so the database is kept.
-            docker compose -f docker-compose.yml down --remove-orphans --timeout 20 \
-              >/dev/null 2>&1 || true
+            # One-time migration: the pre-GHCR stack still runs from the source
+            # tree (/root/workspace/tax) and holds the ports. Named volumes
+            # survive, so the database is kept.
+            docker compose -f /root/workspace/tax/docker-compose.yml down \
+              --remove-orphans --timeout 20 >/dev/null 2>&1 || true
 
             docker compose -f docker-compose.prod.yml pull
             docker compose -f docker-compose.prod.yml up -d --remove-orphans \

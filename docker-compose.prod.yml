@@ -4,8 +4,8 @@ name: tax-form-prod
 # to GHCR; the server only pulls them, so it needs neither the source build
 # toolchain nor a git checkout for the app itself (model copied from fincode).
 #
-# The stack lives next to the source tree at /root/workspace/tax because the
-# api keeps its mutable templates in ./storage, which is bind-mounted below.
+# The stack lives at /opt/tax; the api keeps its mutable templates in
+# ./storage, which is bind-mounted below.
 
 services:
   mysql:
