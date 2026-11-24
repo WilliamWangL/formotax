@@ -38,8 +38,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     // bogus target only produces invalid sitelinks-searchbox markup.
   };
 
+  // Chrome and Edge translate whole pages by wrapping every text node in a
+  // <font> element. React can no longer insert or remove nodes it owns once that
+  // happens, so the next commit throws "Failed to execute 'insertBefore' on
+  // 'Node'" and the page dies with "Application error: a client-side exception
+  // has occurred" - typically right after Generate PDF swaps the filler for the
+  // preview. Opt the document out of translation: the answers have to match the
+  // statutory English wording on the PDF anyway.
   return (
-    <html lang="en">
+    <html lang="en" translate="no" className="notranslate">
       <body>
         <a
           href="#main"

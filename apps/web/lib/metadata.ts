@@ -93,4 +93,8 @@ export const rootMetadata: Metadata = {
     apple: [{ url: '/og/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
   },
   category: 'finance',
+  // The <html translate="no"> attribute covers Chrome and Edge; this meta tag is
+  // the form the translate.google.com proxy honours. Both are needed because
+  // translated text nodes break React's DOM reconciliation on the filler pages.
+  other: { google: 'notranslate' },
 };
