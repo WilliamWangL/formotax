@@ -254,10 +254,30 @@ export class PayPalPaymentProvider implements PaymentProvider {
       this.logger.error(`PayPal ${path} failed with ${response.status}: ${body.slice(0, 400)}`);
       throw new BadRequestException({
         code: 'PROVIDER_ERROR',
-        message: 'PayPal rejected this request. Check the API credentials and try again.',
+        message: this.describeFailure(response.status, body),
       });
     }
     return (await response.json()) as T;
+  }
+
+  /**
+   * Orders API failures are either our bug or the merchant account's state, and
+   * "check the API credentials" told neither story. Name the one case that
+   * needs the shop owner, and stay vague for everything else.
+   */
+  private describeFailure(status: number, body: string): string {
+    let issues: string[] = [];
+    try {
+      const parsed = JSON.parse(body) as { details?: Array<{ issue?: string }> };
+      issues = (parsed.details ?? []).map((detail) => detail.issue ?? '').filter(Boolean);
+    } catch {
+      /* non-JSON error body */
+    }
+    if (issues.includes('PAYEE_ACCOUNT_RESTRICTED')) {
+      return 'PayPal cannot accept payments for this shop yet: the merchant account is restricted. Please try again later.';
+    }
+    if (status === 415) return 'PayPal rejected the request format. Please try again later.';
+    return 'PayPal rejected this request. Please try again later.';
   }
 
   private async rawRequest(path: string, init: RequestInit = {}): Promise<Response> {
