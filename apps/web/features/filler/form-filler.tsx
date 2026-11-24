@@ -73,6 +73,7 @@ export function FormFiller({ definition }: { definition: FormDefinition }) {
   const [price, setPrice] = useState(downloadOffer.price.toFixed(2));
   const [signedIn, setSignedIn] = useState(false);
   const pdfUrlRef = useRef<string | null>(null);
+  const statusRef = useRef<HTMLDivElement | null>(null);
   const downloadRef = useRef<HTMLAnchorElement | null>(null);
   const pollRef = useRef<number | null>(null);
 
@@ -148,6 +149,14 @@ export function FormFiller({ definition }: { definition: FormDefinition }) {
     return () => window.clearTimeout(timer);
   }, [definition.code, getValues, watched]);
 
+  // The status banner lives at the top of the column while the Generate button
+  // sits at the bottom of a long form, so a failed run used to look like a
+  // click that did nothing at all.
+  useEffect(() => {
+    if (!failure) return;
+    statusRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [failure]);
+
   useEffect(() => {
     return () => {
       if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
@@ -171,6 +180,22 @@ export function FormFiller({ definition }: { definition: FormDefinition }) {
     }
   };
 
+  /**
+   * A failed `trigger()` only paints inline messages, and the offending field
+   * is often above the fold: without this the button looks dead. The signature
+   * pad is a canvas, so it carries no `aria-invalid` of its own.
+   */
+  const revealFirstInvalid = () => {
+    window.setTimeout(() => {
+      const target =
+        document.querySelector<HTMLElement>('[aria-invalid="true"]') ??
+        document.querySelector<HTMLElement>('canvas[aria-label="Signature drawing area"]');
+      if (!target) return;
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      target.focus?.({ preventScroll: true });
+    }, 80);
+  };
+
   const validateCurrentStep = async (): Promise<boolean> => {
     const names = visibleFields.map((field) => field.name);
     const valid = await trigger(names, { shouldFocus: true });
@@ -184,7 +209,11 @@ export function FormFiller({ definition }: { definition: FormDefinition }) {
   const handleNext = async () => {
     setNotice(null);
     const valid = await validateCurrentStep();
-    if (!valid) return;
+    if (!valid) {
+      setNotice('Some answers still need attention. Review the highlighted fields.');
+      revealFirstInvalid();
+      return;
+    }
     if (isLastStep) {
       await handleGenerate();
       return;
@@ -209,6 +238,7 @@ export function FormFiller({ definition }: { definition: FormDefinition }) {
       const invalidIndex = steps.findIndex((item) => item.id === result.firstInvalidStepId);
       if (invalidIndex >= 0) goToStep(invalidIndex);
       setNotice('Some answers still need attention. Review the highlighted fields.');
+      revealFirstInvalid();
       return;
     }
 
@@ -216,7 +246,14 @@ export function FormFiller({ definition }: { definition: FormDefinition }) {
     try {
       // pdf-lib is heavy, so it is only downloaded once a PDF is actually needed.
       const { dataUrlToBytes, generateTaxFormPdf } = await import('@tax/pdf-engine');
-      const response = await fetch(definition.pdf.path, { cache: 'force-cache' });
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 30_000);
+      let response: Response;
+      try {
+        response = await fetch(definition.pdf.path, { cache: 'force-cache', signal: controller.signal });
+      } finally {
+        window.clearTimeout(timeout);
+      }
       if (!response.ok) throw new Error(`Template download failed (${response.status}).`);
       const templateBytes = new Uint8Array(await response.arrayBuffer());
       const output = await generateTaxFormPdf({
@@ -235,10 +272,15 @@ export function FormFiller({ definition }: { definition: FormDefinition }) {
       setStage('done');
     } catch (error) {
       setStage('fill');
+      // The failure banner sits at the top of the column, far above the button.
+      console.error('[generate]', error);
+      const aborted = error instanceof DOMException && error.name === 'AbortError';
       setFailure(
-        error instanceof Error
-          ? `We could not create the PDF: ${error.message}`
-          : 'We could not create the PDF. Please try again.',
+        aborted
+          ? 'The form template took too long to load. Check your connection and try again.'
+          : error instanceof Error
+            ? `We could not create the PDF: ${error.message}`
+            : 'We could not create the PDF. Please try again.',
       );
     }
   };
@@ -526,21 +568,26 @@ export function FormFiller({ definition }: { definition: FormDefinition }) {
             ))}
           </ol>
 
-          {notice ? (
-            <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
-              <p>{notice}</p>
-            </div>
-          ) : null}
+          <div ref={statusRef}>
+            {notice ? (
+              <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                <p>{notice}</p>
+              </div>
+            ) : null}
 
-          {failure ? (
-            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-              <p>{failure}</p>
-              <Link href="/pricing" className="mt-2 inline-block font-semibold underline">
-                See pricing
-              </Link>
-            </div>
-          ) : null}
+            {failure ? (
+              <div
+                role="alert"
+                className="mt-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800"
+              >
+                <p>{failure}</p>
+                <Link href="/pricing" className="mt-2 inline-block font-semibold underline">
+                  See pricing
+                </Link>
+              </div>
+            ) : null}
+          </div>
 
           <Card className="mt-4">
             <CardHeader>

@@ -6,7 +6,7 @@ import type {
   FormValues,
   PdfTemplateDefinition,
 } from '@tax/shared-types';
-import { countryName, formatUSDate } from '@tax/validation';
+import { countryName, firstUnprintableChar, formatUSDate } from '@tax/validation';
 
 export interface GeneratePdfOptions {
   templateBytes: Uint8Array;
@@ -102,11 +102,20 @@ function writeText(
     value = value.slice(0, maxLength);
     options.warn?.(`Value truncated to the ${maxLength}-character limit of field ${fieldName}.`);
   }
+  // setText() only stores the string; the glyphs are encoded much later while
+  // the widgets are flattened, and that is where pdf-lib throws on anything
+  // outside WinAnsi (CJK, Cyrillic, emoji). Check first so the failing value is
+  // reported as a warning instead of aborting the whole download.
+  const unprintable = firstUnprintableChar(value);
+  if (unprintable) {
+    value = toWinAnsiSafe(value);
+    options.warn?.(`'${unprintable}' cannot be printed on this PDF and was removed from ${fieldName}.`);
+  }
   try {
     field.setText(value);
   } catch {
     field.setText(toWinAnsiSafe(value));
-    options.warn?.(`Characters outside WinAnsi were removed for field ${fieldName}.`);
+    options.warn?.(`Value was simplified to fit field ${fieldName}.`);
   }
 }
 

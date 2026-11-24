@@ -22,6 +22,16 @@ const ADDRESS_PATTERN = /^[\p{L}\p{M}0-9][\p{L}\p{M}0-9\s.'’#&()/,-]*$/u;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/;
 const PHONE_PATTERN = /^\+?[0-9][0-9\s().-]{6,19}$/;
 
+/**
+ * The PDF templates use the built-in Helvetica font, which is WinAnsi
+ * (cp1252) encoded. Anything outside that set - CJK, Cyrillic, Greek,
+ * emoji - cannot be drawn and makes pdf-lib throw during flattening.
+ */
+const NON_PRINTABLE = /[^\t\n\r\x20-\x7E\xA0-\xFF\u20AC\u201A\u0192\u201E\u2026\u2020\u2021\u02C6\u2030\u0160\u2039\u0152\u017D\u2018\u2019\u201C\u201D\u2022\u2013\u2014\u02DC\u2122\u0161\u203A\u0153\u017E\u0178]/u;
+
+/** Text fields are the ones that end up in a PDF text widget verbatim. */
+const PDF_TEXT_TYPES = new Set(['text', 'textarea', 'address']);
+
 export function digitsOnly(value: string): string {
   return value.replace(/\D+/g, '');
 }
@@ -77,6 +87,16 @@ export function isLatinText(value: string): boolean {
 
 export function isLatinAddress(value: string): boolean {
   return ADDRESS_PATTERN.test(value.trim());
+}
+
+/** The first character the PDF font cannot encode, or null when it can print everything. */
+export function firstUnprintableChar(value: string): string | null {
+  const match = NON_PRINTABLE.exec(value);
+  return match ? match[0] : null;
+}
+
+export function isPdfPrintable(value: string): boolean {
+  return firstUnprintableChar(value) === null;
 }
 
 export function isValidISODate(value: string): boolean {
@@ -153,6 +173,16 @@ export function validateFieldValue(
   }
   if (field.validation?.pattern && !new RegExp(field.validation.pattern).test(value)) {
     return field.validation.message ?? `${field.label} has an invalid format.`;
+  }
+
+  // The PDF's built-in Helvetica is WinAnsi encoded, so a single CJK or
+  // Cyrillic character makes pdf-lib throw while flattening and the download
+  // fails with a message the user cannot act on. Catch it at the field instead.
+  if (PDF_TEXT_TYPES.has(field.type) || rule === 'latin') {
+    const unprintable = firstUnprintableChar(value);
+    if (unprintable) {
+      return `'${unprintable}' cannot be printed on this PDF. Use Latin letters, digits and standard punctuation.`;
+    }
   }
 
   switch (rule) {
