@@ -270,3 +270,4 @@ curl -s localhost:4000/api/v1/tax-forms/W9/template | head -c 8   # %PDF-1.
 - **Redis 未启动**：API 仍可运行，缓存与令牌撤销检查自动降级。
 - **PayPal 未配置**：PayPal 是唯一支付方式，`PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` 为空时 `/health` 报 `paypal: not_configured`，`/downloads/checkout` 返回 `400 PAYMENT_NOT_CONFIGURED`；不存在模拟支付或其它渠道的降级路径。
 - **PayPal 回跳 404 / 无法扣款**：确认 `PUBLIC_BASE_URL` 与访问域名一致（live 必须 https），且 `PAYPAL_WEBHOOK_ID` 与后台 Webhook 一致。
+- **填完点 Generate PDF 后白屏 + “Application error: a client-side exception has occurred”**：浏览器整页翻译会把每个文本节点包进 `<font>`，React 随后插入/删除自己持有的节点就会失败（控制台首行 `Failed to execute 'insertBefore' on 'Node'`）。这类错误只在开启了翻译的浏览器里出现，无头 Chromium 直接跑永远复现不了。根布局已用 `translate="no"` + `<meta name="google" content="notranslate">` + `notranslate` 类退出翻译（代价是该站不再提供自动翻译），`app/error.tsx` 再兜底显示可恢复页面；排查时先确认线上镜像已更新，再让用户关掉翻译/扩展试一次。
