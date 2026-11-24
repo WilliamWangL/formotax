@@ -24,7 +24,13 @@ import { Button } from '@/components/ui/button';
 import { FieldControl } from '@/features/filler/field-control';
 import { PdfPreview } from '@/features/filler/pdf-preview';
 import { SignatureField } from '@/features/filler/signature-field';
-import { fetchDownloadAccess, fetchDownloadOrder, readTokens, startDownloadCheckout } from '@/lib/api';
+import {
+  ApiRequestError,
+  fetchDownloadAccess,
+  fetchDownloadOrder,
+  readTokens,
+  startDownloadCheckout,
+} from '@/lib/api';
 import { readPass, savePass } from '@/lib/downloads';
 import { clearDraft, loadDraft, saveDraft } from '@/lib/draft';
 import { downloadOffer } from '@/lib/site';
@@ -115,7 +121,11 @@ export function FormFiller({ definition }: { definition: FormDefinition }) {
         if (active) setAccess(result);
       })
       .catch(() => {
-        if (active && pass) {
+        if (!active) return;
+        // A rejected token has already been dropped from storage; the button
+        // then sends the visitor through sign-in instead of failing on click.
+        setSignedIn(Boolean(readTokens()));
+        if (pass) {
           setAccess({
             active: true,
             orderNo: pass.orderNo,
@@ -358,6 +368,13 @@ export function FormFiller({ definition }: { definition: FormDefinition }) {
       if (!popup) setCheckoutUrl(checkout.checkoutUrl);
       watchOrder(checkout.orderNo);
     } catch (error) {
+      // A stale access token used to surface as "The access token is invalid or
+      // has expired." and nothing else. Send the visitor through sign-in instead;
+      // the draft is restored when they land back on this page.
+      if (error instanceof ApiRequestError && error.status === 401) {
+        router.push(`/login?next=${encodeURIComponent(returnPath)}`);
+        return;
+      }
       setPayError(error instanceof Error ? error.message : 'Checkout is unavailable right now.');
     }
   };

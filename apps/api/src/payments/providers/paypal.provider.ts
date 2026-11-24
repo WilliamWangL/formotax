@@ -295,6 +295,7 @@ export class PayPalPaymentProvider implements PaymentProvider {
         headers: {
           Authorization: `Basic ${credentials}`,
           'Content-Type': 'application/x-www-form-urlencoded',
+          Accept: 'application/json',
         },
         body: 'grant_type=client_credentials',
       });
@@ -307,10 +308,21 @@ export class PayPalPaymentProvider implements PaymentProvider {
     }
 
     if (!response.ok) {
-      this.logger.error(`PayPal token request failed with ${response.status}.`);
+      // PayPal explains the rejection in the body. Without it a rotated or
+      // mismatched key pair looks exactly like a PayPal outage in the logs.
+      const body = await response.text().catch(() => '');
+      let reason = body.slice(0, 200);
+      try {
+        const parsed = JSON.parse(body) as { error?: string; error_description?: string };
+        reason = [parsed.error, parsed.error_description].filter(Boolean).join(': ') || reason;
+      } catch {
+        /* non-JSON error body */
+      }
+      this.logger.error(`PayPal token request failed with ${response.status}: ${reason}`);
       throw new BadRequestException({
         code: 'PROVIDER_ERROR',
-        message: 'PayPal rejected the API credentials.',
+        message:
+          'PayPal rejected the credentials for this site. Checkout is temporarily unavailable — please try again later.',
       });
     }
 
