@@ -93,7 +93,12 @@ export class PayPalPaymentProvider implements PaymentProvider {
 
     const order = await this.request<PayPalOrder>('/v2/checkout/orders', {
       method: 'POST',
-      headers: { 'PayPal-Request-Id': `${input.order.orderNo}-create` },
+      headers: {
+        'PayPal-Request-Id': `${input.order.orderNo}-create`,
+        // Without this PayPal answers with the minimal order, which carries the
+        // approval link only sometimes; the full body always does.
+        Prefer: 'return=representation',
+      },
       body: JSON.stringify(payload),
     });
 
@@ -263,6 +268,8 @@ export class PayPalPaymentProvider implements PaymentProvider {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
+          // A JSON body without this header is rejected as 415 UNSUPPORTED_MEDIA_TYPE.
+          ...(init.body ? { 'Content-Type': 'application/json' } : {}),
           ...(init.headers ?? {}),
         },
       });
